@@ -1,4 +1,4 @@
-# Text-to-SQL Agentic System
+# Data Analyst Agentic System
 
 LangGraph implementation of the design in `docs/text_to_sql_agent_design_spec.md`.
 Natural-language questions in, plain-English answers out, against the Chinook
