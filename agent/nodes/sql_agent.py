@@ -4,6 +4,7 @@ See docs/text_to_sql_agent_design_spec.md §3.3, §3.6, §3.7, §8.
 """
 
 import json
+import logging
 from dataclasses import dataclass
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
@@ -12,6 +13,8 @@ import config
 from agent.llm import get_llm
 from agent.state import AgentState, ExecutionResult, SubQuery
 from agent.tools.db_tools import tools_sql_agent
+
+logger = logging.getLogger(__name__)
 
 _TOOLS_BY_NAME = {t.name: t for t in tools_sql_agent}
 
@@ -54,6 +57,7 @@ def _invoke_tool(call: dict) -> dict:
 
 def sql_agent_loop(sub_query: SubQuery, state: AgentState, retry_note: str | None = None) -> SubQuery:
     """Runs the bounded tool-calling loop for one sub-query. See spec §3.3."""
+    logger.info("sql_agent: starting loop for sub-query %r", sub_query.intent)
     llm_with_tools = get_llm().bind_tools(tools_sql_agent)
 
     messages = [
@@ -66,10 +70,15 @@ def sql_agent_loop(sub_query: SubQuery, state: AgentState, retry_note: str | Non
         ),
     ]
     if retry_note:
+        logger.info("sql_agent: retrying with validator feedback: %s", retry_note)
         messages.append(HumanMessage(content=retry_note))
 
     while sub_query.tool_call_count < config.MAX_TOOL_CALLS:
         if state["total_tool_calls"] >= config.MAX_TOTAL_TOOL_CALLS:
+            logger.warning(
+                "sql_agent: total_tool_calls backstop reached (%d) -- stopping before this sub-query got a fresh call",
+                state["total_tool_calls"],
+            )
             sub_query.status = "failed"
             return sub_query
 
@@ -78,15 +87,23 @@ def sql_agent_loop(sub_query: SubQuery, state: AgentState, retry_note: str | Non
 
         if not response.tool_calls:
             sub_query.status = "done" if sub_query.result is not None else "failed"
+            logger.info("sql_agent: model finished, status=%s", sub_query.status)
             return sub_query
 
         for call in response.tool_calls:
             sub_query.tool_call_count += 1
             state["total_tool_calls"] += 1
+            logger.info(
+                "sql_agent: tool call #%d -> %s(%s)",
+                sub_query.tool_call_count, call["name"], call["args"],
+            )
             result = _invoke_tool(call)
 
             if call["name"] == "execute_sql":
                 if result.get("success"):
+                    logger.info(
+                        "sql_agent: execute_sql succeeded, %d row(s)", result.get("row_count", 0)
+                    )
                     sub_query.sql = call["args"].get("sql")
                     sub_query.result = ExecutionResult(
                         success=True,
@@ -95,6 +112,11 @@ def sql_agent_loop(sub_query: SubQuery, state: AgentState, retry_note: str | Non
                         row_count=result.get("row_count", 0),
                     )
                 else:
+                    logger.warning(
+                        "sql_agent: execute_sql failed [%s]: %s (retry %d/%d)",
+                        result.get("error_type"), result.get("error"),
+                        sub_query.sql_retry_count + 1, config.MAX_SQL_RETRIES,
+                    )
                     sub_query.sql_retry_count += 1
                     sub_query.error_history.append(result.get("error", ""))
                     result = dict(result)
@@ -111,13 +133,19 @@ def sql_agent_loop(sub_query: SubQuery, state: AgentState, retry_note: str | Non
                 and not result.get("success")
                 and sub_query.sql_retry_count >= config.MAX_SQL_RETRIES
             ):
+                logger.warning("sql_agent: sql_retry_count cap reached, giving up on this sub-query")
                 sub_query.status = "failed"
                 return sub_query
 
             if state["total_tool_calls"] >= config.MAX_TOTAL_TOOL_CALLS:
+                logger.warning(
+                    "sql_agent: total_tool_calls backstop reached (%d) mid-loop",
+                    state["total_tool_calls"],
+                )
                 sub_query.status = "failed"
                 return sub_query
 
+    logger.warning("sql_agent: tool_call_count cap (%d) reached without a final answer", config.MAX_TOOL_CALLS)
     sub_query.status = "failed"  # tool_call_count budget exhausted without a final answer
     return sub_query
 
@@ -166,6 +194,7 @@ def validate_result(result: ExecutionResult, intent: QueryIntent) -> tuple[str, 
 def sql_agent_node(state: AgentState) -> AgentState:
     idx = state["current_sub_query_idx"]
     sub_query = state["sub_queries"][idx]
+    logger.info("sql_agent_node: processing sub-query[%d] = %r", idx, sub_query.intent)
 
     retry_note = None
     while True:
@@ -176,6 +205,7 @@ def sql_agent_node(state: AgentState) -> AgentState:
 
         intent = infer_intent(sub_query.intent)
         verdict, reason = validate_result(sub_query.result, intent)
+        logger.info("result_validator: verdict=%s (%s)", verdict, reason)
         if verdict == "VALID":
             break
 
@@ -183,10 +213,15 @@ def sql_agent_node(state: AgentState) -> AgentState:
             sub_query.sql_retry_count >= config.MAX_SQL_RETRIES
             or state["total_tool_calls"] >= config.MAX_TOTAL_TOOL_CALLS
         ):
+            logger.warning("sql_agent_node: validator rejected result and no budget remains, giving up")
             sub_query.status = "failed"
             sub_query.error_history.append(reason)
             break
 
+        logger.info(
+            "sql_agent_node: validator rejected result, retrying (sql_retry_count -> %d)",
+            sub_query.sql_retry_count + 1,
+        )
         sub_query.sql_retry_count += 1
         sub_query.error_history.append(reason)
         retry_note = (
@@ -195,5 +230,6 @@ def sql_agent_node(state: AgentState) -> AgentState:
         )
         sub_query.status = "pending"
 
+    logger.info("sql_agent_node: sub-query[%d] finished with status=%s", idx, sub_query.status)
     state["sub_queries"][idx] = sub_query
     return state

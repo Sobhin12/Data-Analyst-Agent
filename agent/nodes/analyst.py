@@ -3,6 +3,7 @@
 See docs/text_to_sql_agent_design_spec.md §3.8, §9.
 """
 
+import logging
 import re
 from datetime import datetime, timezone
 
@@ -10,6 +11,8 @@ import config
 from agent.llm import get_llm
 from agent.state import AgentState, SubQuery
 from agent.tools.analyst_tools import summarize_table
+
+logger = logging.getLogger(__name__)
 
 _RANKING_WORDS = ("top ", "rank", "highest", "lowest", "best", "worst")
 _TREND_WORDS = ("trend", "over time", "monthly", "weekly", "growth", "change over")
@@ -169,16 +172,26 @@ def analyst_node(state: AgentState) -> AgentState:
 
     sufficient = check_data_sufficiency(sub_queries, report_type, requested_n)
     state["data_sufficient"] = sufficient
+    logger.info("analyst: report_type=%s sufficient=%s", report_type, sufficient)
 
     if not sufficient and state.get("refine_count", 0) < config.MAX_REFINE_COUNT:
+        reason = _insufficiency_reason(report_type, sub_queries, requested_n)
         state["refine_count"] = state.get("refine_count", 0) + 1
-        state["refine_request"] = _insufficiency_reason(report_type, sub_queries, requested_n)
+        state["refine_request"] = reason
         state["status"] = "running"
+        logger.info(
+            "analyst: requesting refine (refine_count -> %d): %s",
+            state["refine_count"], reason,
+        )
         return state
+
+    if not sufficient:
+        logger.warning("analyst: still insufficient at refine cap, reporting best-effort with a caveat")
 
     report = generate_explanation(state, report_type)
     state["final_report"] = report
     state["status"] = "done"
+    logger.info("analyst: final report generated (%d chars)", len(report))
 
     filters = extract_filters(resolved_query)
     if filters:

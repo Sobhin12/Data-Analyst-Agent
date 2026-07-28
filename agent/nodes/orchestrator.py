@@ -3,9 +3,13 @@
 See docs/text_to_sql_agent_design_spec.md §3.2.
 """
 
+import logging
+
 import config
 from agent.llm import get_llm, parse_json_response
 from agent.state import AgentState, SubQuery
+
+logger = logging.getLogger(__name__)
 
 _PLAN_PROMPT = """You are a query planner for a SQL agent system.
 
@@ -49,6 +53,7 @@ Respond in JSON only, no other text:
 
 
 def plan_initial(state: AgentState) -> AgentState:
+    logger.info("orchestrator: planning sub-queries for %r", state["resolved_query"])
     llm = get_llm(json_mode=True)
     prompt = _PLAN_PROMPT.format(
         resolved_query=state["resolved_query"],
@@ -58,7 +63,19 @@ def plan_initial(state: AgentState) -> AgentState:
     plan = parse_json_response(response.content)
 
     intents = plan.get("sub_queries") or [state["resolved_query"]]
+    if len(intents) > config.MAX_SUB_QUERIES:
+        logger.warning(
+            "orchestrator: plan requested %d sub-queries, clipping to cap of %d",
+            len(intents), config.MAX_SUB_QUERIES,
+        )
     intents = intents[: config.MAX_SUB_QUERIES]  # clip defensively, never crash on a bad plan
+
+    logger.info(
+        "orchestrator: planned %d sub-quer%s (strategy=%s): %s",
+        len(intents), "y" if len(intents) == 1 else "ies",
+        plan.get("aggregation_strategy"), intents,
+    )
+    logger.debug("orchestrator: reasoning=%s", plan.get("reasoning"))
 
     state["execution_plan"] = plan
     state["sub_queries"] = [SubQuery(intent=intent) for intent in intents]
@@ -68,6 +85,7 @@ def plan_initial(state: AgentState) -> AgentState:
 
 
 def plan_refine(state: AgentState) -> AgentState:
+    logger.info("orchestrator: refine requested: %s", state.get("refine_request"))
     llm = get_llm(json_mode=True)
     sub_queries = state["sub_queries"]
     summary = "\n".join(
@@ -92,6 +110,11 @@ def plan_refine(state: AgentState) -> AgentState:
         target_index = max(0, min(target_index, len(sub_queries) - 1))
         if new_intent:
             sub_queries[target_index].intent = new_intent
+
+    logger.info(
+        "orchestrator: refine action=%s target_index=%d new_intent=%r",
+        action, target_index, sub_queries[target_index].intent,
+    )
 
     # Fresh budget for the affected sub-query -- a different query, its own chance to fail. See spec §8.
     sub_queries[target_index].tool_call_count = 0

@@ -8,13 +8,18 @@ main.py's _fresh_turn_input for why certain state fields reset per turn and
 others (active_filters, turn_history) deliberately don't.
 """
 
+import logging
 import uuid
 
 import streamlit as st
 
 import config
 from agent.graph import build_graph
+from agent.logging_config import configure_logging
 from main import _fresh_turn_input
+
+configure_logging()
+logger = logging.getLogger(__name__)
 
 st.set_page_config(page_title="Text-to-SQL Agent", page_icon="🗄️", layout="centered")
 
@@ -50,15 +55,18 @@ def _run_turn(user_text: str) -> None:
     st.session_state.awaiting_answer_to = None
     st.session_state.pending_options = None
 
+    logger.info("turn start: %r (session=%s)", raw_query, st.session_state.thread_id[:8])
     try:
         with st.spinner("Thinking..."):
             result = get_graph().invoke(_fresh_turn_input(raw_query), thread_config)
     except Exception as e:
+        logger.exception("turn failed with an unhandled exception")
         st.session_state.messages.append(
             {"role": "assistant", "content": f"Sorry, something went wrong: {e}"}
         )
         return
 
+    logger.info("turn end: status=%s", result.get("status"))
     status = result.get("status")
 
     if status == "awaiting_user":

@@ -5,11 +5,20 @@ Usage:
     python main.py "your question"  # single-shot mode, prints the report and exits
 """
 
+import logging
 import sys
 import uuid
 
 from agent.graph import build_graph
+from agent.logging_config import configure_logging
 from agent.state import new_state
+
+# Deliberately not called at import time: streamlit_app.py and the test suite
+# both import _fresh_turn_input from this module, and neither should have the
+# side effect of configuring global logging / writing to logs/agent.log just
+# from that import. Only the __main__ guard below calls it, since that's the
+# only path where this file is genuinely the process entry point.
+logger = logging.getLogger(__name__)
 
 # Per-turn fields reset on every new question; active_filters/last_metric/
 # last_entity/turn_history are deliberately omitted so they persist from the
@@ -55,11 +64,14 @@ def _print_result(result: dict) -> str | None:
 def run_single(query: str) -> None:
     graph = build_graph()
     thread_config = {"configurable": {"thread_id": str(uuid.uuid4())}}
+    logger.info("turn start: %r", query)
     try:
         result = graph.invoke(_fresh_turn_input(query), thread_config)
-    except Exception as e:
-        print(f"agent> Sorry, something went wrong: {e}")
+    except Exception:
+        logger.exception("turn failed with an unhandled exception")
+        print(f"agent> Sorry, something went wrong: {sys.exc_info()[1]}")
         return
+    logger.info("turn end: status=%s", result.get("status"))
     _print_result(result)
 
 
@@ -90,18 +102,22 @@ def run_repl() -> None:
         else:
             raw_query = user_input
 
+        logger.info("turn start: %r", raw_query)
         try:
             result = graph.invoke(_fresh_turn_input(raw_query), thread_config)
-        except Exception as e:
-            print(f"agent> Sorry, something went wrong: {e}")
+        except Exception:
+            logger.exception("turn failed with an unhandled exception")
+            print(f"agent> Sorry, something went wrong: {sys.exc_info()[1]}")
             awaiting_answer_to = None
             continue
 
+        logger.info("turn end: status=%s", result.get("status"))
         waiting = _print_result(result)
         awaiting_answer_to = raw_query if waiting else None
 
 
 if __name__ == "__main__":
+    configure_logging()
     if len(sys.argv) > 1:
         run_single(" ".join(sys.argv[1:]))
     else:

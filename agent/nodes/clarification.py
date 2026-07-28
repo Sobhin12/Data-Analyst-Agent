@@ -3,11 +3,14 @@
 See docs/text_to_sql_agent_design_spec.md §3.1, §7, §10.
 """
 
+import logging
 import re
 
 import config
 from agent.llm import get_llm, parse_json_response
 from agent.state import AgentState
+
+logger = logging.getLogger(__name__)
 
 _TIME_WORDS = re.compile(
     r"\b(today|yesterday|week|month|quarter|year|q[1-4]|ytd|"
@@ -108,38 +111,55 @@ def build_single_question(missing_param: str) -> str:
 
 def clarification_node(state: AgentState) -> AgentState:
     query = state["raw_query"]
+    logger.info("clarification: query=%r", query)
 
     can_resolve, resolution = memory_can_resolve(query, state)
     if can_resolve:
+        logger.info("clarification: resolved silently from memory (%s)", resolution)
         state["resolved_query"] = query
         state["assumption_note"] = resolution
         state["ambiguity_type"] = "clear"
         return state
 
     scores = score_ambiguity(query, state)
+    logger.debug("clarification: ambiguity scores=%s", scores)
     state["ambiguity_score"] = {
         "missing_filter": scores.get("missing_filter", 0.0),
         "vague_intent": scores.get("vague_intent", 0.0),
     }
 
     if scores.get("memory_resolves"):
+        logger.info(
+            "clarification: LLM classifier resolved from memory (%s)",
+            scores.get("memory_resolution"),
+        )
         state["resolved_query"] = query
         state["assumption_note"] = scores.get("memory_resolution") or "Resolved from prior context."
         state["ambiguity_type"] = "clear"
         return state
 
     if scores.get("missing_filter", 0.0) > config.AMBIGUITY_THRESHOLD:
+        logger.info(
+            "clarification: missing_filter=%.2f > threshold, asking about %r",
+            scores.get("missing_filter", 0.0), scores.get("missing_param"),
+        )
         state["ambiguity_type"] = "missing_filter"
         state["clarification_request"] = build_single_question(scores.get("missing_param", ""))
         state["status"] = "awaiting_user"
         return state
 
     if scores.get("vague_intent", 0.0) > config.AMBIGUITY_THRESHOLD:
+        interpretations = scores.get("interpretations", [])
+        logger.info(
+            "clarification: vague_intent=%.2f > threshold, offering %d option(s)",
+            scores.get("vague_intent", 0.0), len(interpretations),
+        )
         state["ambiguity_type"] = "vague_intent"
-        state["option_cards"] = [{"label": opt} for opt in scores.get("interpretations", [])]
+        state["option_cards"] = [{"label": opt} for opt in interpretations]
         state["status"] = "awaiting_user"
         return state
 
+    logger.info("clarification: query is clear, passing through")
     state["ambiguity_type"] = "clear"
     state["resolved_query"] = query
     return state
