@@ -180,7 +180,8 @@ def get_sample_rows(table: str, n: int = 5) -> dict:
                 "rows": [tuple(row) for row in rows],
             }
     except SQLAlchemyError as e:
-        return {"success": False, "error": str(e.orig) if getattr(e, "orig", None) else str(e)}
+        message = str(e.orig) if getattr(e, "orig", None) else str(e)
+        return {"success": False, "error": message, "error_type": classify_sql_error(message)}
 
 
 @tool
@@ -211,7 +212,8 @@ def get_column_stats(table: str, column: str) -> dict:
                 "null_count": null_count,
             }
     except SQLAlchemyError as e:
-        return {"success": False, "error": str(e.orig) if getattr(e, "orig", None) else str(e)}
+        message = str(e.orig) if getattr(e, "orig", None) else str(e)
+        return {"success": False, "error": message, "error_type": classify_sql_error(message)}
 
 
 @tool

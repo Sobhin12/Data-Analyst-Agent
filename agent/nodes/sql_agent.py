@@ -123,6 +123,13 @@ def sql_agent_loop(sub_query: SubQuery, state: AgentState, retry_note: str | Non
                     result["corrective_hint"] = _CORRECTIVE_HINTS.get(
                         result.get("error_type"), _CORRECTIVE_HINTS["UNKNOWN"]
                     )
+            elif not result.get("success") and result.get("error_type"):
+                # get_sample_rows/get_column_stats can fail the same way execute_sql
+                # does (bad table/column) -- give the model the same corrective hint.
+                result = dict(result)
+                result["corrective_hint"] = _CORRECTIVE_HINTS.get(
+                    result.get("error_type"), _CORRECTIVE_HINTS["UNKNOWN"]
+                )
 
             messages.append(
                 ToolMessage(content=json.dumps(result, default=str), tool_call_id=call["id"])
