@@ -99,9 +99,18 @@ way; it's a model-quality difference, not a bug -- exactly what
 ## Running it
 
 ```bash
-python main.py                              # interactive REPL
+streamlit run streamlit_app.py               # chat UI, in the browser
+python main.py                               # interactive REPL
 python main.py "total revenue this quarter"  # single-shot mode
 ```
+
+`streamlit_app.py` is a chat interface over the same graph (built once and
+cached across the server process via `@st.cache_resource`; each browser tab
+gets its own session via a random `thread_id`, same isolation mechanism as
+the CLI). Missing filters show up as a question; a vague-intent clarification
+renders as clickable option buttons instead of typed text. Use "New session"
+in the sidebar to drop memory and start a fresh conversation without
+restarting the server.
 
 ## Testing
 
@@ -129,6 +138,8 @@ a real multi-turn UI would want the proper interrupt/resume flow instead.
 ## Project layout
 
 See `docs/text_to_sql_agent_design_spec.md` §13 -- the code follows that
-structure, with one exception: `agent/tools/db_tools.py` also holds
-`is_select_query`/`classify_sql_error`, and validation lives alongside the
-loop in `agent/nodes/sql_agent.py` rather than a separate module.
+structure, with two exceptions: `agent/tools/db_tools.py` also holds
+`is_select_query`/`classify_sql_error` and validation lives alongside the
+loop in `agent/nodes/sql_agent.py` rather than a separate module, and there's
+a `streamlit_app.py` at the repo root alongside `main.py` -- a second, thin
+front end over the same `agent/graph.py`, not part of the original spec.
