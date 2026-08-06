@@ -1,9 +1,8 @@
-# Text-to-SQL Agentic System — Technical Design Specification
+# Data Analyst Agentic System — Technical Design Specification
 
 **Version:** 1.0  
 **Framework:** LangGraph + LangChain  
 **Database:** SQLite (Chinook / Northwind)  
-**Eval Stack:** LangSmith · DeepEval · BIRD Benchmark  
 
 ---
 
