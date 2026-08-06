@@ -98,23 +98,28 @@ way; it's a model-quality difference, not a bug -- exactly what
 ## Running it
 
 ```bash
-streamlit run streamlit_app.py               # chat UI, in the browser
-python main.py                               # interactive REPL
-python main.py "total revenue this quarter"  # single-shot mode
+uvicorn api:app                              # agent backend, in one terminal
+streamlit run streamlit_app.py               # chat UI, in another terminal
+python main.py                               # interactive REPL (doesn't need api.py)
+python main.py "total revenue this quarter"  # single-shot mode (doesn't need api.py)
 ```
 
-`streamlit_app.py` is a chat interface over the same graph (built once and
-cached across the server process via `@st.cache_resource`; each browser tab
-gets its own session via a random `thread_id`, same isolation mechanism as
-the CLI). Missing filters show up as a question; a vague-intent clarification
-renders as clickable option buttons instead of typed text. Use "New session"
-in the sidebar to drop memory and start a fresh conversation without
-restarting the server.
+`streamlit_app.py` is a chat client over `api.py`'s `POST /query`, not the
+graph directly -- `api.py` must be running first (see `config.API_BASE_URL`).
+Each browser tab gets its own session via a random `session_id`, echoed back
+by the API and reused on every follow-up request, same isolation mechanism
+as the CLI's `thread_id`. Missing filters show up as a question; a
+vague-intent clarification renders as clickable option buttons instead of
+typed text. Use "New session" in the sidebar to drop memory and start a
+fresh conversation without restarting either process.
+
+`main.py`'s CLI, by contrast, still invokes the compiled graph directly
+in-process -- it has no dependency on `api.py` at all.
 
 ## Testing
 
 ```bash
-pytest                    # 102 tests, all runnable without an API key
+pytest                    # 100 tests, all runnable without an API key
 python -m eval.run_eval   # full gold-question eval suite -- needs a real API key
 ```
 
@@ -139,6 +144,8 @@ a real multi-turn UI would want the proper interrupt/resume flow instead.
 See `docs/text_to_sql_agent_design_spec.md` §13 -- the code follows that
 structure, with two exceptions: `agent/tools/db_tools.py` also holds
 `is_select_query`/`classify_sql_error` and validation lives alongside the
-loop in `agent/nodes/sql_agent.py` rather than a separate module, and there's
-a `streamlit_app.py` at the repo root alongside `main.py` -- a second, thin
-front end over the same `agent/graph.py`, not part of the original spec.
+loop in `agent/nodes/sql_agent.py` rather than a separate module. There are
+also two front ends not part of the original spec: `main.py` (CLI) invokes
+`agent/graph.py` directly in-process; `api.py` (FastAPI, `GET /health` +
+`POST /query`) wraps the same graph behind HTTP, and `streamlit_app.py` is a
+thin chat client over `api.py` rather than the graph itself.
