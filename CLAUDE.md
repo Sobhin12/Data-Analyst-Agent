@@ -50,8 +50,9 @@ pip install -r requirements.txt
 cp .env.example .env                          # then set ANTHROPIC_API_KEY=sk-ant-...
 
 # Run
-streamlit run streamlit_app.py                # chat UI
-python main.py                                # interactive REPL
+uvicorn api:app                               # agent backend (api.py) -- required by streamlit_app.py
+streamlit run streamlit_app.py                # chat UI, talks to api.py over HTTP
+python main.py                                # interactive REPL -- invokes the graph directly, no api.py needed
 python main.py "total revenue this quarter"   # single-shot mode
 
 # Test
@@ -113,8 +114,12 @@ sql_executed, result_summary, timestamp}` per turn) lives directly in
 `AgentState` (`agent/state.py`) and is persisted automatically by LangGraph's
 own checkpointer (`InMemorySaver`, wired in `agent/graph.py`), keyed by
 `thread_id`/`session_id` -- there is no separate memory store to keep in
-sync. `main.py` and `streamlit_app.py` each generate their own
-`thread_id`/`session_id` per session for isolation. `orchestrator_node`
+sync. `main.py` generates its own `thread_id` per REPL session and invokes
+the graph directly. `api.py` generates a `session_id` per `/query` call when
+the client doesn't supply one, and uses it as the LangGraph `thread_id`;
+`streamlit_app.py` generates a `session_id` client-side and passes it to
+`api.py` on every request rather than invoking the graph itself.
+`orchestrator_node`
 reads the last few `turn_history` entries as free-text context in its
 planning prompt and judges relevance itself; there is deliberately no
 separate `active_filters`-style key-value cache mechanically reapplied to
@@ -154,10 +159,15 @@ chat UI; a real multi-turn UI would want the proper interrupt/resume flow.
 ## Logging
 
 Call `configure_logging()` (`agent/logging_config.py`) once per process entry
-point (`main.py`, `streamlit_app.py`, `eval/run_eval.py`) -- it's
-deliberately not called at import time, since `streamlit_app.py` and the test
-suite both import `_fresh_turn_input` from `main.py` and neither should get
-the side effect of configuring global logging just from that import. Every
+point (`main.py`, `api.py`, `streamlit_app.py`, `eval/run_eval.py`) -- it's
+deliberately not called at import time in `main.py`, since `api.py` and the
+test suite both import `_fresh_turn_input` from `main.py` and neither should
+get the side effect of configuring global logging just from that import.
+`api.py` itself configures logging in its FastAPI `lifespan` startup hook
+rather than at import time, for the same reason -- importing it for a test's
+`TestClient` shouldn't configure global logging either. `streamlit_app.py`
+calls it unconditionally at module level, same as before, since nothing
+imports `streamlit_app.py` as a library. Every
 module logs via `logging.getLogger(__name__)` and relies on propagation to
 the root logger; nothing under `agent/` configures its own handlers.
 `LOG_LEVEL=DEBUG` (in `.env`) shows every tool call's full args/results;

@@ -80,7 +80,7 @@ def run_repl() -> None:
     session_id = str(uuid.uuid4())
     thread_config = {"configurable": {"thread_id": session_id}}
 
-    print("Text-to-SQL Agent (Chinook). Type 'exit' to quit.")
+    print("Data Analyst Agent (Chinook). Type 'exit' to quit.")
     print(f"Session: {session_id}\n")
 
     awaiting_answer_to: str | None = None

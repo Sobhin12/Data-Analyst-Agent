@@ -43,3 +43,17 @@ MAX_REFINE_COUNT = 2
 # --- Result validator ---
 LARGE_RESULT_ROW_THRESHOLD = 10_000
 DEFAULT_ROW_LIMIT = 1000
+
+# --- API backend (api.py) ---
+# Base URL streamlit_app.py talks to -- api.py must be running separately
+# (uvicorn api:app) for the Streamlit UI to work.
+API_BASE_URL = os.environ.get("API_BASE_URL", "http://127.0.0.1:8000")
+
+# --- Eval suite pacing (eval/run_eval.py) ---
+# run_eval.py fires many LLM calls back to back (agent-internal + judge, x16
+# questions), always sequentially -- never concurrently, since a provider's
+# per-minute request/token limits apply across the whole run regardless of
+# how the calls are shaped. Groq's lower tiers enforce tight RPM/TPM limits;
+# this adds a deliberate gap in front of every call. 0 (default) is a no-op
+# for providers without tight limits.
+EVAL_CALL_DELAY_SECONDS = float(os.environ.get("EVAL_CALL_DELAY_SECONDS", "0"))
