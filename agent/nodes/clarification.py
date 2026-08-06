@@ -1,13 +1,15 @@
-"""Clarification node: ambiguity classification + resolution.
+"""Clarification node: deterministic memory-based resolution.
 
-See docs/text_to_sql_agent_design_spec.md §3.1, §7, §10.
+Ambiguity classification itself lives in the orchestrator now -- it's the
+node that actually needs to know whether it can plan, so it's the one
+that decides whether to ask. See docs/text_to_sql_agent_design_spec.md
+§3.1, §7, §10 (note: §3.1's LLM classifier step is superseded by
+orchestrator.plan_initial, see agent/nodes/orchestrator.py).
 """
 
 import logging
 import re
 
-import config
-from agent.llm import get_llm, parse_json_response
 from agent.state import AgentState
 
 logger = logging.getLogger(__name__)
@@ -42,12 +44,12 @@ def detect_missing_filter(query: str, active_filters: dict) -> str | None:
 
 
 def memory_can_resolve(query: str, state: AgentState) -> tuple[bool, str]:
-    """Fast heuristic path, tried before the LLM classifier (§10).
+    """Fast, free heuristic path, tried before orchestrator.plan_initial's LLM call (§10).
 
     Deliberately narrow: it only fills a simple missing categorical filter
     from active_filters. Richer cases ("same as last week but for Q2") are
-    left to the LLM classifier's own memory_resolves field below, since
-    faking that with regex would be more fragile than just asking the model.
+    left to the orchestrator's own planning judgment, since faking that with
+    regex would be more fragile than just asking the model.
     """
     active_filters = state.get("active_filters") or {}
     if not active_filters or not state.get("turn_history"):
@@ -61,46 +63,6 @@ def memory_can_resolve(query: str, state: AgentState) -> tuple[bool, str]:
     return False, ""
 
 
-_CLASSIFIER_PROMPT = """You are an ambiguity classifier for a SQL agent system.
-
-Given the user query below, score it on two dimensions from 0 to 1:
-- missing_filter: Does the query lack a required filter (time, region, product, etc.)?
-- vague_intent: Is it unclear which metric or KPI the user wants?
-
-Also check the conversation memory to see if any ambiguity is resolvable
-from prior context (e.g. "same as last week but for Q2", "now break it down by region").
-
-Respond in JSON only, no other text:
-{{
-  "missing_filter": 0.0,
-  "vague_intent": 0.0,
-  "memory_resolves": false,
-  "memory_resolution": "",
-  "missing_param": "",
-  "interpretations": []
-}}
-
-Query: {query}
-Memory (recent turns and active filters): {memory}
-Known filters already in play: {available_filters}
-"""
-
-
-def score_ambiguity(query: str, state: AgentState) -> dict:
-    llm = get_llm(json_mode=True)
-    memory_context = {
-        "active_filters": state.get("active_filters") or {},
-        "recent_turns": (state.get("turn_history") or [])[-3:],
-    }
-    prompt = _CLASSIFIER_PROMPT.format(
-        query=query,
-        memory=memory_context,
-        available_filters=list((state.get("active_filters") or {}).keys()),
-    )
-    response = llm.invoke(prompt)
-    return parse_json_response(response.content)
-
-
 def build_single_question(missing_param: str) -> str:
     """Rule: offer choices, not open text; never ask more than one thing at once."""
     template = _QUESTION_TEMPLATES.get(missing_param)
@@ -110,56 +72,20 @@ def build_single_question(missing_param: str) -> str:
 
 
 def clarification_node(state: AgentState) -> AgentState:
+    """Deterministic pre-check only. If a known filter was silently carried
+    over from a prior turn, resolve here for free; otherwise pass the raw
+    query through unchanged and let orchestrator.plan_initial decide whether
+    it has enough to plan or needs to ask the user."""
     query = state["raw_query"]
     logger.info("clarification: query=%r", query)
 
     can_resolve, resolution = memory_can_resolve(query, state)
     if can_resolve:
         logger.info("clarification: resolved silently from memory (%s)", resolution)
-        state["resolved_query"] = query
         state["assumption_note"] = resolution
-        state["ambiguity_type"] = "clear"
-        return state
+    else:
+        logger.info("clarification: no memory shortcut, passing through to orchestrator")
 
-    scores = score_ambiguity(query, state)
-    logger.debug("clarification: ambiguity scores=%s", scores)
-    state["ambiguity_score"] = {
-        "missing_filter": scores.get("missing_filter", 0.0),
-        "vague_intent": scores.get("vague_intent", 0.0),
-    }
-
-    if scores.get("memory_resolves"):
-        logger.info(
-            "clarification: LLM classifier resolved from memory (%s)",
-            scores.get("memory_resolution"),
-        )
-        state["resolved_query"] = query
-        state["assumption_note"] = scores.get("memory_resolution") or "Resolved from prior context."
-        state["ambiguity_type"] = "clear"
-        return state
-
-    if scores.get("missing_filter", 0.0) > config.AMBIGUITY_THRESHOLD:
-        logger.info(
-            "clarification: missing_filter=%.2f > threshold, asking about %r",
-            scores.get("missing_filter", 0.0), scores.get("missing_param"),
-        )
-        state["ambiguity_type"] = "missing_filter"
-        state["clarification_request"] = build_single_question(scores.get("missing_param", ""))
-        state["status"] = "awaiting_user"
-        return state
-
-    if scores.get("vague_intent", 0.0) > config.AMBIGUITY_THRESHOLD:
-        interpretations = scores.get("interpretations", [])
-        logger.info(
-            "clarification: vague_intent=%.2f > threshold, offering %d option(s)",
-            scores.get("vague_intent", 0.0), len(interpretations),
-        )
-        state["ambiguity_type"] = "vague_intent"
-        state["option_cards"] = [{"label": opt} for opt in interpretations]
-        state["status"] = "awaiting_user"
-        return state
-
-    logger.info("clarification: query is clear, passing through")
-    state["ambiguity_type"] = "clear"
     state["resolved_query"] = query
+    state["ambiguity_type"] = "clear"
     return state

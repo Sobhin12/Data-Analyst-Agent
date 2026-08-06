@@ -11,7 +11,7 @@ from unittest.mock import patch
 from langchain_core.messages import AIMessage
 
 from agent.graph import build_graph
-from agent.nodes import analyst, clarification, orchestrator, sql_agent
+from agent.nodes import analyst, orchestrator, sql_agent
 from main import _fresh_turn_input
 
 
@@ -54,7 +54,8 @@ def _final():
 
 def test_orchestrator_splits_a_comparison_and_both_sub_queries_run_and_combine():
     orchestrator_plan = (
-        '{"sub_queries": ["total revenue for invoices in 2021", '
+        '{"needs_clarification": false, '
+        '"sub_queries": ["total revenue for invoices in 2021", '
         '"total revenue for invoices in 2022"], '
         '"aggregation_strategy": "compare", "reasoning": "two distinct years"}'
     )
@@ -67,10 +68,6 @@ def test_orchestrator_splits_a_comparison_and_both_sub_queries_run_and_combine()
     ]
 
     with (
-        patch.object(
-            clarification, "score_ambiguity",
-            return_value={"missing_filter": 0.0, "vague_intent": 0.0, "memory_resolves": False},
-        ),
         patch.object(orchestrator, "get_llm", return_value=TextStubLLM([orchestrator_plan])),
         patch.object(sql_agent, "get_llm", return_value=ToolCallingStubLLM(sql_agent_responses)),
         patch.object(analyst, "get_llm", return_value=TextStubLLM(["2009 revenue was higher than 2010."])),

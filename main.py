@@ -27,7 +27,7 @@ _RESET_KEYS = [
     "resolved_query", "assumption_note", "clarification_request", "option_cards",
     "execution_plan", "schema_snapshot", "sub_queries", "current_sub_query_idx",
     "total_tool_calls", "report_type", "data_sufficient", "refine_request",
-    "refine_count", "final_report", "status", "error", "ambiguity_score", "ambiguity_type",
+    "refine_count", "final_report", "status", "error", "ambiguity_type",
 ]
 
 

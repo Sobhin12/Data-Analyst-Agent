@@ -8,12 +8,13 @@ SQLite database -- no SQL ever shown to the user.
 
 ```mermaid
 flowchart TD
-    U([User question]) --> CLAR["clarification_node<br/>ambiguity scoring + memory resolution"]
+    U([User question]) --> CLAR["clarification_node<br/>deterministic memory resolution only"]
 
-    CLAR -->|ambiguous, awaiting_user| WAIT([Question / option cards<br/>returned to the user])
-    CLAR -->|clear, or resolved from memory| ORCH
+    CLAR --> ORCH
 
-    ORCH["orchestrator_node<br/>plans 1-3 sub-queries"] --> SQL
+    ORCH["orchestrator_node<br/>plans 1-3 sub-queries, or asks<br/>if it can't form a plan"]
+    ORCH -->|needs_clarification, awaiting_user| WAIT([Question / option cards<br/>returned to the user])
+    ORCH -->|plan ready| SQL
 
     subgraph SQLAGENT["sql_agent_node -- one sub-query"]
         SQL["Tool-calling loop<br/>(model chooses the tools itself)"] --> VAL{"result_validator"}

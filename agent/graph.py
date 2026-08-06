@@ -19,13 +19,15 @@ def advance_sub_query_node(state: AgentState) -> AgentState:
     return state
 
 
-def route_after_clarification(state: AgentState) -> str:
+def route_after_orchestrator(state: AgentState) -> str:
     # "awaiting_user" ends this turn's graph run -- the CLI surfaces the
     # clarification_request/option_cards and starts a fresh invoke() on the
     # same thread_id once the user answers. See README for why this simpler
     # pattern was used instead of LangGraph's interrupt()/resume machinery.
-    destination = END if state.get("status") == "awaiting_user" else "orchestrator"
-    logger.debug("route: clarification -> %s", destination)
+    # Only plan_initial can produce "awaiting_user"; plan_refine always
+    # returns "running", so this is a no-op on the refine loop.
+    destination = END if state.get("status") == "awaiting_user" else "sql_agent"
+    logger.debug("route: orchestrator -> %s", destination)
     return destination
 
 
@@ -54,10 +56,10 @@ def build_graph():
     graph.add_node("analyst", analyst_node)
 
     graph.add_edge(START, "clarification")
+    graph.add_edge("clarification", "orchestrator")
     graph.add_conditional_edges(
-        "clarification", route_after_clarification, {"orchestrator": "orchestrator", END: END}
+        "orchestrator", route_after_orchestrator, {"sql_agent": "sql_agent", END: END}
     )
-    graph.add_edge("orchestrator", "sql_agent")
     graph.add_conditional_edges(
         "sql_agent",
         route_after_sql_agent,

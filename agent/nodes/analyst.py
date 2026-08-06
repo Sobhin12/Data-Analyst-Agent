@@ -83,13 +83,19 @@ def _insufficiency_reason(
 
 
 def extract_filters(resolved_query: str) -> dict:
+    """Only records a filter when the query mentions exactly one value for it.
+
+    A comparison query ("revenue between 2021 and 2022") mentions two periods --
+    picking the first as "the" active filter would silently scope later,
+    unrelated queries to a year the user never asked to stick with.
+    """
     filters = {}
-    region_match = _REGION_PATTERN.search(resolved_query)
-    if region_match:
-        filters["region"] = region_match.group(1).title()
-    period_match = _PERIOD_PATTERN.search(resolved_query)
-    if period_match:
-        filters["period"] = period_match.group(1)
+    region_matches = _REGION_PATTERN.findall(resolved_query)
+    if len(set(m.lower() for m in region_matches)) == 1:
+        filters["region"] = region_matches[0].title()
+    period_matches = _PERIOD_PATTERN.findall(resolved_query)
+    if len(set(m.lower() for m in period_matches)) == 1:
+        filters["period"] = period_matches[0]
     return filters
 
 

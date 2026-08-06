@@ -34,7 +34,6 @@ class AgentState(TypedDict, total=False):
     session_id: str
 
     # Clarification
-    ambiguity_score: dict
     ambiguity_type: str  # "missing_filter" | "vague_intent" | "clear"
     resolved_query: Optional[str]
     assumption_note: Optional[str]
@@ -73,7 +72,6 @@ def new_state(raw_query: str, session_id: str) -> AgentState:
     return AgentState(
         raw_query=raw_query,
         session_id=session_id,
-        ambiguity_score={},
         ambiguity_type="clear",
         resolved_query=None,
         assumption_note=None,

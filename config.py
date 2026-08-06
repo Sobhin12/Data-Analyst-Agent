@@ -40,9 +40,6 @@ MAX_TOTAL_TOOL_CALLS = 24
 # --- Analyst refine loop (whole turn) ---
 MAX_REFINE_COUNT = 2
 
-# --- Clarification thresholds ---
-AMBIGUITY_THRESHOLD = 0.7
-
 # --- Result validator ---
 LARGE_RESULT_ROW_THRESHOLD = 10_000
 DEFAULT_ROW_LIMIT = 1000

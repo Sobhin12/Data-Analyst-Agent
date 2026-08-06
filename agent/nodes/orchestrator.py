@@ -1,22 +1,41 @@
-"""Orchestrator node: sub-query planning and analyst-driven refinement.
+"""Orchestrator node: ambiguity gate, sub-query planning, and analyst-driven refinement.
 
-See docs/text_to_sql_agent_design_spec.md §3.2.
+Ambiguity is decided here rather than in a separate upfront classifier
+(agent/nodes/clarification.py) because the two questions are really one
+question: "can I turn this into a concrete plan?" A standalone classifier
+scoring "does this lack a filter" in the abstract flags queries that don't
+need one at all (e.g. "total number of artists") and, once a filter shows
+up in memory, tends to demand it be re-stated on every later turn. Tying
+the ask to an actual failed planning attempt grounds it in whether the
+information is really needed.
+
+See docs/text_to_sql_agent_design_spec.md §3.1, §3.2.
 """
 
 import logging
 
 import config
 from agent.llm import get_llm, parse_json_response
+from agent.nodes.clarification import build_single_question
 from agent.state import AgentState, SubQuery
 
 logger = logging.getLogger(__name__)
 
 _PLAN_PROMPT = """You are a query planner for a SQL agent system.
 
-Decide whether the user's question needs one SQL query or several genuinely
-independent sub-queries. SQL is expressive (GROUP BY, CASE WHEN, window
-functions) -- most "compare A vs B" and "trend over time" questions collapse
-into a single query. Only split into multiple sub-queries when:
+First, decide whether you have enough information to plan this question.
+A plain aggregate like "total number of artists" needs no filter at all --
+don't ask for one just because it wasn't mentioned. Only ask for
+clarification when:
+- a filter or metric is referenced but never given a concrete value (e.g.
+  "this region", "that same period") and no value for it appears below in
+  "known filters", or
+- the metric/intent is genuinely ambiguous between multiple distinct readings
+
+If you can plan: decide whether the question needs one SQL query or several
+genuinely independent sub-queries. SQL is expressive (GROUP BY, CASE WHEN,
+window functions) -- most "compare A vs B" and "trend over time" questions
+collapse into a single query. Only split into multiple sub-queries when:
 - the pieces need different metrics/tables that can't share one aggregation, or
 - a later piece depends on values only knowable after an earlier one runs
 
@@ -24,12 +43,18 @@ Never plan more than {max_sub_queries} sub-queries.
 
 Respond in JSON only, no other text:
 {{
+  "needs_clarification": false,
+  "clarification_type": "missing_filter",
+  "missing_param": "",
+  "clarification_question": "",
+  "interpretations": [],
   "sub_queries": ["<intent for sub-query 1>"],
   "aggregation_strategy": "single",
-  "reasoning": "<why this many, one sentence>"
+  "reasoning": "<why this many sub-queries, or why clarification is needed, one sentence>"
 }}
 
 User's question: {resolved_query}
+Known filters already in play (from prior turns, may not apply here): {active_filters}
 """
 
 _REFINE_PROMPT = """The analyst determined the current results are insufficient to
@@ -58,9 +83,25 @@ def plan_initial(state: AgentState) -> AgentState:
     prompt = _PLAN_PROMPT.format(
         resolved_query=state["resolved_query"],
         max_sub_queries=config.MAX_SUB_QUERIES,
+        active_filters=state.get("active_filters") or {},
     )
     response = llm.invoke(prompt)
     plan = parse_json_response(response.content)
+
+    if plan.get("needs_clarification"):
+        clarification_type = plan.get("clarification_type") or "vague_intent"
+        logger.info(
+            "orchestrator: needs clarification (%s): %s",
+            clarification_type, plan.get("reasoning"),
+        )
+        state["ambiguity_type"] = clarification_type
+        if clarification_type == "missing_filter":
+            state["clarification_request"] = build_single_question(plan.get("missing_param", ""))
+        else:
+            interpretations = plan.get("interpretations") or []
+            state["option_cards"] = [{"label": opt} for opt in interpretations]
+        state["status"] = "awaiting_user"
+        return state
 
     intents = plan.get("sub_queries") or [state["resolved_query"]]
     if len(intents) > config.MAX_SUB_QUERIES:
