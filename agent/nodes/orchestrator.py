@@ -144,7 +144,17 @@ def plan_initial(state: AgentState) -> AgentState:
             state["clarification_request"] = build_single_question(plan.get("missing_param", ""))
         else:
             interpretations = plan.get("interpretations") or []
-            state["option_cards"] = [{"label": opt} for opt in interpretations]
+            if interpretations:
+                state["option_cards"] = [{"label": opt} for opt in interpretations]
+            else:
+                # The model flagged ambiguity but didn't name concrete options --
+                # fall back to a plain question so the frontend always has
+                # something to show instead of silently waiting on nothing.
+                state["clarification_request"] = (
+                    plan.get("clarification_question")
+                    or plan.get("reasoning")
+                    or "Could you clarify what you're looking for?"
+                )
         state["status"] = "awaiting_user"
         return state
 

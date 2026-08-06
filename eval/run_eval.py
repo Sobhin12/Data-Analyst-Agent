@@ -4,12 +4,21 @@ Needs a real LLM configured (config.LLM_PROVIDER + matching API key) --
 this drives the actual agent end-to-end for every gold question, then scores
 it with both execution_accuracy (objective) and llm_judge (subjective).
 
+Questions run strictly sequentially, on purpose -- never concurrently. A
+provider's per-minute request/token limits apply across the whole run
+regardless of how the calls are shaped, and config.EVAL_CALL_DELAY_SECONDS
+paces every individual call (agent-internal and judge) to stay under them.
+
     python -m eval.run_eval
+    python -m eval.run_eval -n 5   # only run the first 5 gold questions
 """
 
+import argparse
 import logging
+import time
 import uuid
 
+import config
 from agent.graph import build_graph
 from agent.logging_config import configure_logging
 from db.loader import get_engine
@@ -26,7 +35,10 @@ def run_full_eval(questions=GOLD_QUESTIONS):
     engine = get_engine()
     results = []
 
-    for q in questions:
+    for i, q in enumerate(questions):
+        if i > 0:
+            time.sleep(config.EVAL_CALL_DELAY_SECONDS)
+
         logger.info("eval: running question %r", q["question"])
         thread_config = {"configurable": {"thread_id": str(uuid.uuid4())}}
         response = graph.invoke(_fresh_turn_input(q["question"]), thread_config)
@@ -44,6 +56,7 @@ def run_full_eval(questions=GOLD_QUESTIONS):
             except Exception:
                 exec_acc = False
 
+        time.sleep(config.EVAL_CALL_DELAY_SECONDS)
         judge_scores = llm_judge(
             question=q["question"],
             gold_answer=q.get("gold_answer"),
@@ -80,8 +93,10 @@ def _print_summary(results: list[dict]) -> None:
     first_attempt = sum(1 for r in results if r["sql_retry_count"] == 0)
     print(f"First-attempt success: {first_attempt}/{len(results)}")
 
-    avg_overall = sum(r.get("overall", 0) for r in results) / len(results)
-    print(f"Average LLM judge overall score: {avg_overall:.2f}/5")
+    print("LLM judge scores (avg/5):")
+    for metric in ("accuracy", "faithfulness", "clarity", "completeness", "appropriate_refusal", "overall"):
+        avg = sum(r.get(metric, 0) for r in results) / len(results)
+        print(f"  {metric}: {avg:.2f}/5 ({avg / 5:.0%})")
 
     print()
     for r in results:
@@ -90,6 +105,14 @@ def _print_summary(results: list[dict]) -> None:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run the gold-question eval suite.")
+    parser.add_argument(
+        "-n", "--limit", type=int, default=None,
+        help="Only run the first N gold questions (default: all %d)" % len(GOLD_QUESTIONS),
+    )
+    args = parser.parse_args()
+
     configure_logging()
-    results = run_full_eval()
+    questions = GOLD_QUESTIONS[: args.limit] if args.limit else GOLD_QUESTIONS
+    results = run_full_eval(questions)
     _print_summary(results)
