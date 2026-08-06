@@ -1,8 +1,6 @@
 from agent.nodes.analyst import (
     check_data_sufficiency,
     classify_report_type,
-    extract_filters,
-    extract_metric,
     extract_requested_n,
 )
 from agent.state import ExecutionResult, SubQuery
@@ -62,12 +60,3 @@ class TestExtractHelpers:
     def test_extract_requested_n(self):
         assert extract_requested_n("top 5 customers") == 5
         assert extract_requested_n("total revenue") is None
-
-    def test_extract_filters(self):
-        filters = extract_filters("revenue for North region this quarter")
-        assert filters["region"] == "North"
-        assert "quarter" in filters["period"]
-
-    def test_extract_metric(self):
-        assert extract_metric("how about South region revenue") == "revenue"
-        assert extract_metric("nothing relevant here") is None

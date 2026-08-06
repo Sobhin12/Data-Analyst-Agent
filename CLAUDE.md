@@ -67,28 +67,32 @@ ruff/black config, or pre-commit hook) -- don't invent one.
 ## Architecture
 
 ```
-START -> clarification -> orchestrator -> sql_agent -> [advance_sub_query -> sql_agent]* -> analyst -> END
-                |                                                                              |
-                +---(awaiting_user, ends turn)                    (insufficient, refine_count<2) -> orchestrator
+START -> orchestrator -> sql_agent -> [advance_sub_query -> sql_agent]* -> analyst -> END
+              |                                                              |
+              +---(awaiting_user, ends turn)          (insufficient, refine_count<2) -> orchestrator
 ```
 
-Five LangGraph nodes (`agent/nodes/`), wired in `agent/graph.py`:
+Four LangGraph nodes (`agent/nodes/`), wired in `agent/graph.py`:
 
-1. **`clarification_node`** -- scores ambiguity (missing filter / vague intent)
-   via a cheap deterministic memory check first, then an LLM classifier. If
-   ambiguous, sets `status="awaiting_user"` and the graph run ends for this
-   turn; otherwise resolves the query and continues.
-2. **`orchestrator_node`** -- plans 1-3 independent sub-queries (`MAX_SUB_QUERIES`),
-   or on a refine loop, patches/adds one sub-query based on the analyst's
-   feedback.
-3. **`sql_agent_node`** -- for one sub-query: a genuinely agentic tool-calling
+1. **`orchestrator_node`** -- the ambiguity gate *and* the planner in one LLM
+   call: given the question plus recent `turn_history` as free-text context
+   (not a pre-extracted filter), it either produces 1-3 independent
+   sub-queries (`MAX_SUB_QUERIES`) or, if it genuinely can't form a plan,
+   sets `status="awaiting_user"` and the graph run ends for this turn. On a
+   refine loop it instead patches/adds one sub-query based on the analyst's
+   feedback. (There used to be a separate upfront `clarification_node`
+   scoring ambiguity before planning -- removed because scoring "does this
+   lack a filter" in the abstract, decoupled from whether planning actually
+   needs it, flagged queries that didn't need a filter at all, e.g. "total
+   number of artists", and got worse the longer a session ran.)
+2. **`sql_agent_node`** -- for one sub-query: a genuinely agentic tool-calling
    loop (the model itself decides which of the five bound tools to call, in
    what order, and when it has enough to commit to SQL -- not a fixed
    explore-then-generate pipeline), followed by `result_validator`, a
    separate deterministic sanity check that runs after the model is done
    (defense in depth against a confidently-wrong agent). Loops back to itself
    via `advance_sub_query` until every sub-query is processed.
-4. **`analyst_node`** -- classifies report type (fact/ranking/trend/comparison/alert),
+3. **`analyst_node`** -- classifies report type (fact/ranking/trend/comparison/alert),
    checks whether the data is sufficient to answer that report type, and
    either requests a refine (back to orchestrator) or writes the final
    plain-English explanation.
@@ -104,12 +108,19 @@ tool-calling freedom, and analyst refinement all multiply each other
 - `tool_call_count` (max 6, per sub-query, every tool call)
 - `total_tool_calls` (max 24, whole turn -- the real backstop)
 
-**Session memory** (`active_filters`, `last_metric`, `turn_history`) lives
-directly in `AgentState` (`agent/state.py`) and is persisted automatically by
-LangGraph's own checkpointer (`InMemorySaver`, wired in `agent/graph.py`),
-keyed by `thread_id`/`session_id` -- there is no separate memory store to
-keep in sync. `main.py` and `streamlit_app.py` each generate their own
-`thread_id`/`session_id` per session for isolation.
+**Session memory** (`turn_history`, a list of `{raw_query, resolved_query,
+sql_executed, result_summary, timestamp}` per turn) lives directly in
+`AgentState` (`agent/state.py`) and is persisted automatically by LangGraph's
+own checkpointer (`InMemorySaver`, wired in `agent/graph.py`), keyed by
+`thread_id`/`session_id` -- there is no separate memory store to keep in
+sync. `main.py` and `streamlit_app.py` each generate their own
+`thread_id`/`session_id` per session for isolation. `orchestrator_node`
+reads the last few `turn_history` entries as free-text context in its
+planning prompt and judges relevance itself; there is deliberately no
+separate `active_filters`-style key-value cache mechanically reapplied to
+later turns -- an earlier version had one, and it silently mis-scoped
+unrelated follow-up questions to whichever period/region the *first*
+comparison-style query happened to mention first.
 
 **Provider abstraction**: `agent/llm.py` is the only file that knows about
 provider differences (Anthropic vs. Groq, via `config.LLM_PROVIDER`).
@@ -117,11 +128,11 @@ Everything else uses the same LangChain `.bind_tools()`/`.tool_calls`
 interface regardless of which provider is active. Not every Groq-hosted
 model supports tool-calling -- the SQL agent's loop depends on it.
 
-**Known simplification vs. the spec**: clarification's "ask and wait" doesn't
-use LangGraph's `interrupt()`/resume machinery. When a turn ends with
+**Known simplification vs. the spec**: the "ask and wait" clarification flow
+doesn't use LangGraph's `interrupt()`/resume machinery. When a turn ends with
 `status == "awaiting_user"`, the caller prints the question, and the *next*
 user message is concatenated onto the original query
-(`"<original> -- <answer>"`) and run through `clarification_node` again from
+(`"<original> -- <answer>"`) and run through `orchestrator_node` again from
 scratch (see `main.py`'s `run_repl`). Simpler to reason about for a CLI/simple
 chat UI; a real multi-turn UI would want the proper interrupt/resume flow.
 

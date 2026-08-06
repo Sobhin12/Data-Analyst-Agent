@@ -20,16 +20,6 @@ _ALERT_WORDS = ("anomaly", "unusual", "spike", "spiked", "drop", "dropped")
 _COMPARISON_WORDS = ("compare", " vs ", "versus", "difference between")
 
 _REQUESTED_N_PATTERN = re.compile(r"top\s+(\d+)", re.IGNORECASE)
-_REGION_PATTERN = re.compile(r"\b(north|south|east|west)\b", re.IGNORECASE)
-_PERIOD_PATTERN = re.compile(
-    r"\b(this\s+(?:week|month|quarter|year)|last\s+(?:week|month|quarter|year)|"
-    r"q[1-4]\s*\d{0,4}|\d{4})\b",
-    re.IGNORECASE,
-)
-_METRIC_WORDS = (
-    "revenue", "sales", "profit", "spending", "orders", "customers",
-    "invoices", "tracks", "albums", "refunds", "signups",
-)
 
 
 def classify_report_type(resolved_query: str, sub_queries: list[SubQuery]) -> str:
@@ -80,31 +70,6 @@ def _insufficiency_reason(
         return f"Asked for top {requested_n or 1}, but got fewer rows than that."
     failed = [sq.intent for sq in sub_queries if sq.status != "done"]
     return f"One or more sub-queries failed to return usable data: {failed}"
-
-
-def extract_filters(resolved_query: str) -> dict:
-    """Only records a filter when the query mentions exactly one value for it.
-
-    A comparison query ("revenue between 2021 and 2022") mentions two periods --
-    picking the first as "the" active filter would silently scope later,
-    unrelated queries to a year the user never asked to stick with.
-    """
-    filters = {}
-    region_matches = _REGION_PATTERN.findall(resolved_query)
-    if len(set(m.lower() for m in region_matches)) == 1:
-        filters["region"] = region_matches[0].title()
-    period_matches = _PERIOD_PATTERN.findall(resolved_query)
-    if len(set(m.lower() for m in period_matches)) == 1:
-        filters["period"] = period_matches[0]
-    return filters
-
-
-def extract_metric(resolved_query: str) -> str | None:
-    lowered = resolved_query.lower()
-    for word in _METRIC_WORDS:
-        if word in lowered:
-            return word
-    return None
 
 
 def _build_data_summary(sub_queries: list[SubQuery]) -> str:
@@ -198,13 +163,6 @@ def analyst_node(state: AgentState) -> AgentState:
     state["final_report"] = report
     state["status"] = "done"
     logger.info("analyst: final report generated (%d chars)", len(report))
-
-    filters = extract_filters(resolved_query)
-    if filters:
-        state["active_filters"] = {**(state.get("active_filters") or {}), **filters}
-    metric = extract_metric(resolved_query)
-    if metric:
-        state["last_metric"] = metric
 
     _append_turn_history(state)
     return state

@@ -5,7 +5,7 @@
 Reuses the exact same turn-input construction as the CLI (main.py) so both
 front ends share one definition of "what a fresh turn looks like" -- see
 main.py's _fresh_turn_input for why certain state fields reset per turn and
-others (active_filters, turn_history) deliberately don't.
+turn_history deliberately doesn't.
 """
 
 import logging

@@ -6,7 +6,6 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from agent.nodes.analyst import analyst_node
-from agent.nodes.clarification import clarification_node
 from agent.nodes.orchestrator import orchestrator_node
 from agent.nodes.sql_agent import sql_agent_node
 from agent.state import AgentState
@@ -49,14 +48,12 @@ def route_after_analyst(state: AgentState) -> str:
 def build_graph():
     graph = StateGraph(AgentState)
 
-    graph.add_node("clarification", clarification_node)
     graph.add_node("orchestrator", orchestrator_node)
     graph.add_node("sql_agent", sql_agent_node)
     graph.add_node("advance_sub_query", advance_sub_query_node)
     graph.add_node("analyst", analyst_node)
 
-    graph.add_edge(START, "clarification")
-    graph.add_edge("clarification", "orchestrator")
+    graph.add_edge(START, "orchestrator")
     graph.add_conditional_edges(
         "orchestrator", route_after_orchestrator, {"sql_agent": "sql_agent", END: END}
     )

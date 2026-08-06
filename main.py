@@ -20,9 +20,9 @@ from agent.state import new_state
 # only path where this file is genuinely the process entry point.
 logger = logging.getLogger(__name__)
 
-# Per-turn fields reset on every new question; active_filters/last_metric/
-# last_entity/turn_history are deliberately omitted so they persist from the
-# checkpoint across turns -- that's the whole memory design (spec §10).
+# Per-turn fields reset on every new question; turn_history is deliberately
+# omitted so it persists from the checkpoint across turns -- that's the
+# whole memory design (spec §10).
 _RESET_KEYS = [
     "resolved_query", "assumption_note", "clarification_request", "option_cards",
     "execution_plan", "schema_snapshot", "sub_queries", "current_sub_query_idx",

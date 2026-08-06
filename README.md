@@ -8,9 +8,7 @@ SQLite database -- no SQL ever shown to the user.
 
 ```mermaid
 flowchart TD
-    U([User question]) --> CLAR["clarification_node<br/>deterministic memory resolution only"]
-
-    CLAR --> ORCH
+    U([User question]) --> ORCH
 
     ORCH["orchestrator_node<br/>plans 1-3 sub-queries, or asks<br/>if it can't form a plan"]
     ORCH -->|needs_clarification, awaiting_user| WAIT([Question / option cards<br/>returned to the user])
@@ -30,8 +28,8 @@ flowchart TD
     ANALYST["analyst_node<br/>classify report type, check sufficiency,<br/>write the explanation"] -->|insufficient, refine_count < 2| ORCH
     ANALYST -->|sufficient, or refine cap reached| DONE([final_report to the user])
 
-    CP[(LangGraph checkpointer<br/>session memory)] -.->|active_filters, turn_history,<br/>persisted per thread_id| CLAR
-    ANALYST -.->|writes turn_history,<br/>active_filters, last_metric| CP
+    CP[(LangGraph checkpointer<br/>session memory)] -.->|turn_history,<br/>persisted per thread_id| ORCH
+    ANALYST -.->|writes turn_history| CP
 ```
 
 Two things worth noting that aren't obvious from the diagram:
@@ -129,10 +127,10 @@ genuinely needs a configured provider, since it drives the actual agent.
 
 ## Known simplification vs. the spec
 
-Clarification's "ask and wait" doesn't use LangGraph's `interrupt()`/resume
+The "ask and wait" clarification flow doesn't use LangGraph's `interrupt()`/resume
 machinery. Instead, when a turn ends with `status == "awaiting_user"`, the CLI
 prints the question, and the *next* user message is concatenated onto the
-original query (`"<original> -- <answer>"`) and run through `clarification_node`
+original query (`"<original> -- <answer>"`) and run through `orchestrator_node`
 again from scratch. Simpler to reason about, and it's fine for a CLI REPL;
 a real multi-turn UI would want the proper interrupt/resume flow instead.
 

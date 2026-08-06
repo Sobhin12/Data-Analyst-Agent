@@ -33,14 +33,12 @@ class AgentState(TypedDict, total=False):
     raw_query: str
     session_id: str
 
-    # Clarification
+    # Orchestrator: ambiguity gate + planning
     ambiguity_type: str  # "missing_filter" | "vague_intent" | "clear"
     resolved_query: Optional[str]
     assumption_note: Optional[str]
     clarification_request: Optional[str]
     option_cards: Optional[list[dict]]
-
-    # Planning
     execution_plan: Optional[dict]
 
     # SQL Agent
@@ -56,10 +54,9 @@ class AgentState(TypedDict, total=False):
     refine_count: int
     final_report: Optional[str]
 
-    # Memory (persisted automatically by the LangGraph checkpointer)
-    active_filters: dict
-    last_metric: Optional[str]
-    last_entity: Optional[str]
+    # Memory (persisted automatically by the LangGraph checkpointer). The
+    # orchestrator reads recent entries as free-text context for planning --
+    # see agent/nodes/orchestrator.py.
     turn_history: list[dict]
 
     # Control
@@ -87,9 +84,6 @@ def new_state(raw_query: str, session_id: str) -> AgentState:
         refine_request=None,
         refine_count=0,
         final_report=None,
-        active_filters={},
-        last_metric=None,
-        last_entity=None,
         turn_history=[],
         status="running",
         error=None,

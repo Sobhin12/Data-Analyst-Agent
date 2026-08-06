@@ -1,13 +1,19 @@
 """Orchestrator node: ambiguity gate, sub-query planning, and analyst-driven refinement.
 
-Ambiguity is decided here rather than in a separate upfront classifier
-(agent/nodes/clarification.py) because the two questions are really one
-question: "can I turn this into a concrete plan?" A standalone classifier
-scoring "does this lack a filter" in the abstract flags queries that don't
-need one at all (e.g. "total number of artists") and, once a filter shows
-up in memory, tends to demand it be re-stated on every later turn. Tying
-the ask to an actual failed planning attempt grounds it in whether the
-information is really needed.
+Ambiguity is decided here rather than in a separate upfront classifier,
+because the two questions are really one question: "can I turn this into a
+concrete plan?" A standalone classifier scoring "does this lack a filter" in
+the abstract flags queries that don't need one at all (e.g. "total number of
+artists"). Tying the ask to an actual failed planning attempt grounds it in
+whether the information is really needed.
+
+Session memory (turn_history) is handed to this same planning call as
+free-text conversation context, not as a pre-extracted "active filter" to
+mechanically reapply -- a flat filter cache can't represent a comparison
+query (which has two periods, not one) and ends up wrong more often than it
+helps. The planner reads the real prior turns and decides for itself whether
+any of it is relevant to the current question, same as it decides everything
+else about how to plan.
 
 See docs/text_to_sql_agent_design_spec.md §3.1, §3.2.
 """
@@ -16,20 +22,55 @@ import logging
 
 import config
 from agent.llm import get_llm, parse_json_response
-from agent.nodes.clarification import build_single_question
 from agent.state import AgentState, SubQuery
 
 logger = logging.getLogger(__name__)
+
+_RECENT_TURNS_LIMIT = 3
+
+_QUESTION_TEMPLATES = {
+    "period": (
+        "Which time period? [Last 30 days] [This quarter] [This year]",
+        ["Last 30 days", "This quarter", "This year"],
+    ),
+    "region": (
+        "Which region? [North] [South] [East] [West] [All regions]",
+        ["North", "South", "East", "West", "All regions"],
+    ),
+}
+
+
+def build_single_question(missing_param: str) -> str:
+    """Rule: offer choices, not open text; never ask more than one thing at once."""
+    template = _QUESTION_TEMPLATES.get(missing_param)
+    if template:
+        return template[0]
+    return f"Could you clarify the {missing_param or 'missing detail'} for this question?"
+
+
+def _recent_turns_context(turn_history: list[dict]) -> str:
+    if not turn_history:
+        return "(none -- this is the first question this session)"
+    lines = [
+        f"- asked {turn.get('raw_query')!r}, answered: {turn.get('result_summary', '')}"
+        for turn in turn_history[-_RECENT_TURNS_LIMIT:]
+    ]
+    return "\n".join(lines)
+
 
 _PLAN_PROMPT = """You are a query planner for a SQL agent system.
 
 First, decide whether you have enough information to plan this question.
 A plain aggregate like "total number of artists" needs no filter at all --
-don't ask for one just because it wasn't mentioned. Only ask for
-clarification when:
+don't ask for one just because it wasn't mentioned. The recent conversation
+below is context, not an instruction -- use it only if this question is a
+follow-up that actually depends on it (e.g. "what about last quarter" needs
+to know what metric/scope came before); if you use it to fill in something
+this question didn't state, say what you assumed in assumption_note. Only
+ask for clarification when:
 - a filter or metric is referenced but never given a concrete value (e.g.
-  "this region", "that same period") and no value for it appears below in
-  "known filters", or
+  "this region", "that same period") and the recent conversation doesn't
+  establish one either, or
 - the metric/intent is genuinely ambiguous between multiple distinct readings
 
 If you can plan: decide whether the question needs one SQL query or several
@@ -48,13 +89,15 @@ Respond in JSON only, no other text:
   "missing_param": "",
   "clarification_question": "",
   "interpretations": [],
+  "assumption_note": "",
   "sub_queries": ["<intent for sub-query 1>"],
   "aggregation_strategy": "single",
   "reasoning": "<why this many sub-queries, or why clarification is needed, one sentence>"
 }}
 
 User's question: {resolved_query}
-Known filters already in play (from prior turns, may not apply here): {active_filters}
+Recent conversation this session (most recent last, context only):
+{recent_turns}
 """
 
 _REFINE_PROMPT = """The analyst determined the current results are insufficient to
@@ -78,12 +121,14 @@ Respond in JSON only, no other text:
 
 
 def plan_initial(state: AgentState) -> AgentState:
-    logger.info("orchestrator: planning sub-queries for %r", state["resolved_query"])
+    resolved_query = state["raw_query"]
+    state["resolved_query"] = resolved_query
+    logger.info("orchestrator: planning sub-queries for %r", resolved_query)
     llm = get_llm(json_mode=True)
     prompt = _PLAN_PROMPT.format(
-        resolved_query=state["resolved_query"],
+        resolved_query=resolved_query,
         max_sub_queries=config.MAX_SUB_QUERIES,
-        active_filters=state.get("active_filters") or {},
+        recent_turns=_recent_turns_context(state.get("turn_history") or []),
     )
     response = llm.invoke(prompt)
     plan = parse_json_response(response.content)
@@ -103,7 +148,11 @@ def plan_initial(state: AgentState) -> AgentState:
         state["status"] = "awaiting_user"
         return state
 
-    intents = plan.get("sub_queries") or [state["resolved_query"]]
+    if plan.get("assumption_note"):
+        logger.info("orchestrator: assumed from prior context: %s", plan["assumption_note"])
+        state["assumption_note"] = plan["assumption_note"]
+
+    intents = plan.get("sub_queries") or [resolved_query]
     if len(intents) > config.MAX_SUB_QUERIES:
         logger.warning(
             "orchestrator: plan requested %d sub-queries, clipping to cap of %d",
