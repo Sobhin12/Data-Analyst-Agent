@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 import config
-from agent.llm import get_llm
+from agent.llm import get_llm, record_usage
 from agent.state import AgentState, ExecutionResult, SubQuery
 from agent.tools.db_tools import tools_sql_agent
 
@@ -83,6 +83,7 @@ def sql_agent_loop(sub_query: SubQuery, state: AgentState, retry_note: str | Non
             return sub_query
 
         response = llm_with_tools.invoke(messages)
+        record_usage(state, response)
         messages.append(response)
 
         if not response.tool_calls:

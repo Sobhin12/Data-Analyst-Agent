@@ -57,7 +57,7 @@ def run_full_eval(questions=GOLD_QUESTIONS):
                 exec_acc = False
 
         time.sleep(config.EVAL_CALL_DELAY_SECONDS)
-        judge_scores = llm_judge(
+        judge_scores, judge_usage = llm_judge(
             question=q["question"],
             gold_answer=q.get("gold_answer"),
             agent_response=response.get("final_report"),
@@ -77,6 +77,13 @@ def run_full_eval(questions=GOLD_QUESTIONS):
                 "sql_retry_count": first.sql_retry_count if first else None,
                 "total_tool_calls": response.get("total_tool_calls"),
                 "clarification_fired": response.get("ambiguity_type") != "clear",
+                # Agent tokens (serving the query) and judge tokens (grading it
+                # afterward) are kept separate -- one is a real serving cost,
+                # the other is eval-harness overhead. See eval/llm_judge.py.
+                "agent_input_tokens": response.get("total_input_tokens", 0),
+                "agent_output_tokens": response.get("total_output_tokens", 0),
+                "judge_input_tokens": judge_usage["input_tokens"],
+                "judge_output_tokens": judge_usage["output_tokens"],
                 **judge_scores,
             }
         )
@@ -97,6 +104,13 @@ def _print_summary(results: list[dict]) -> None:
     for metric in ("accuracy", "faithfulness", "clarity", "completeness", "appropriate_refusal", "overall"):
         avg = sum(r.get(metric, 0) for r in results) / len(results)
         print(f"  {metric}: {avg:.2f}/5 ({avg / 5:.0%})")
+
+    agent_in = sum(r.get("agent_input_tokens", 0) for r in results)
+    agent_out = sum(r.get("agent_output_tokens", 0) for r in results)
+    judge_in = sum(r.get("judge_input_tokens", 0) for r in results)
+    judge_out = sum(r.get("judge_output_tokens", 0) for r in results)
+    print(f"Agent token usage (serving the {len(results)} queries): {agent_in} in / {agent_out} out")
+    print(f"Judge token usage (grading the {len(results)} queries):  {judge_in} in / {judge_out} out")
 
     print()
     for r in results:

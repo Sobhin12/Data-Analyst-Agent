@@ -15,13 +15,14 @@ class StubJudge:
         return AIMessage(
             content='{"accuracy": 5, "faithfulness": 5, "clarity": 4, '
             '"completeness": 5, "appropriate_refusal": 5, "overall": 5, '
-            '"reasoning": "matches exactly"}'
+            '"reasoning": "matches exactly"}',
+            usage_metadata={"input_tokens": 120, "output_tokens": 40, "total_tokens": 160},
         )
 
 
 def test_llm_judge_parses_scores_from_response():
     with patch.object(llm_judge_module, "get_llm", return_value=StubJudge()):
-        scores = llm_judge_module.llm_judge(
+        scores, usage = llm_judge_module.llm_judge(
             question="What is the total revenue this quarter?",
             gold_answer=2328.6,
             agent_response="Total revenue: $2328.60",
@@ -31,3 +32,4 @@ def test_llm_judge_parses_scores_from_response():
     assert scores["accuracy"] == 5
     assert scores["overall"] == 5
     assert "reasoning" in scores
+    assert usage == {"input_tokens": 120, "output_tokens": 40}

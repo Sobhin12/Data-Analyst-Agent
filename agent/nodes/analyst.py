@@ -8,7 +8,7 @@ import re
 from datetime import datetime, timezone
 
 import config
-from agent.llm import get_llm
+from agent.llm import get_llm, record_usage
 from agent.state import AgentState, SubQuery
 from agent.tools.analyst_tools import summarize_table
 
@@ -116,6 +116,7 @@ def generate_explanation(state: AgentState, report_type: str) -> str:
         data_summary=_build_data_summary(state["sub_queries"]),
     )
     response = llm.invoke(prompt)
+    record_usage(state, response)
     return response.content.strip()
 
 

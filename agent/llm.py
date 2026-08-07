@@ -59,6 +59,20 @@ def get_llm(temperature: float = 0, json_mode: bool = False):
     return llm
 
 
+def record_usage(state: dict, response) -> None:
+    """Accumulates one LLM call's token usage onto state's whole-turn totals.
+
+    Both langchain-anthropic and langchain-groq populate the standard
+    AIMessage.usage_metadata field, so there's no provider branching needed
+    here despite this being the provider-abstraction file.
+    """
+    usage = getattr(response, "usage_metadata", None)
+    if not usage:
+        return
+    state["total_input_tokens"] = state.get("total_input_tokens", 0) + usage.get("input_tokens", 0)
+    state["total_output_tokens"] = state.get("total_output_tokens", 0) + usage.get("output_tokens", 0)
+
+
 def parse_json_response(text: str) -> dict:
     """Extracts a JSON object from a model response, tolerating ```json fences."""
     fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)

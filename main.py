@@ -26,8 +26,9 @@ logger = logging.getLogger(__name__)
 _RESET_KEYS = [
     "resolved_query", "assumption_note", "clarification_request", "option_cards",
     "execution_plan", "schema_snapshot", "sub_queries", "current_sub_query_idx",
-    "total_tool_calls", "report_type", "data_sufficient", "refine_request",
-    "refine_count", "final_report", "status", "error", "ambiguity_type",
+    "total_tool_calls", "total_input_tokens", "total_output_tokens", "report_type",
+    "data_sufficient", "refine_request", "refine_count", "final_report", "status",
+    "error", "ambiguity_type",
 ]
 
 
@@ -36,6 +37,12 @@ def _fresh_turn_input(raw_query: str) -> dict:
     turn_input = {key: defaults[key] for key in _RESET_KEYS}
     turn_input["raw_query"] = raw_query
     return turn_input
+
+
+def _print_token_usage(result: dict) -> None:
+    tokens_in = result.get("total_input_tokens", 0)
+    tokens_out = result.get("total_output_tokens", 0)
+    print(f"        [tokens: {tokens_in} in / {tokens_out} out]")
 
 
 def _print_result(result: dict) -> str | None:
@@ -49,15 +56,18 @@ def _print_result(result: dict) -> str | None:
         elif result.get("option_cards"):
             options = ", ".join(o.get("label", "") for o in result["option_cards"])
             print(f"agent> Which do you mean? {options}")
+        _print_token_usage(result)
         return "waiting"
 
     if result.get("final_report"):
         print(f"agent> {result['final_report']}")
         if result.get("assumption_note"):
             print(f"        ({result['assumption_note']})")
+        _print_token_usage(result)
         return None
 
     print(f"agent> Sorry, I couldn't complete that. ({result.get('error') or 'unknown error'})")
+    _print_token_usage(result)
     return None
 
 

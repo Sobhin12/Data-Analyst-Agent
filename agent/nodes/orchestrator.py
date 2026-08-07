@@ -21,7 +21,7 @@ See docs/text_to_sql_agent_design_spec.md §3.1, §3.2.
 import logging
 
 import config
-from agent.llm import get_llm, parse_json_response
+from agent.llm import get_llm, parse_json_response, record_usage
 from agent.state import AgentState, SubQuery
 
 logger = logging.getLogger(__name__)
@@ -131,6 +131,7 @@ def plan_initial(state: AgentState) -> AgentState:
         recent_turns=_recent_turns_context(state.get("turn_history") or []),
     )
     response = llm.invoke(prompt)
+    record_usage(state, response)
     plan = parse_json_response(response.content)
 
     if plan.get("needs_clarification"):
@@ -197,6 +198,7 @@ def plan_refine(state: AgentState) -> AgentState:
         max_sub_queries=config.MAX_SUB_QUERIES,
     )
     response = llm.invoke(prompt)
+    record_usage(state, response)
     decision = parse_json_response(response.content)
 
     action = decision.get("action", "patch")

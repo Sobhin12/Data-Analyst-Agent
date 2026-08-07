@@ -47,6 +47,14 @@ class AgentState(TypedDict, total=False):
     current_sub_query_idx: int
     total_tool_calls: int
 
+    # Token usage, accumulated across every LLM call this turn (agent/llm.py's
+    # record_usage) -- orchestrator planning/refine, the sql_agent tool-calling
+    # loop, and the analyst's explanation. Judge-side usage (eval/llm_judge.py)
+    # is tracked separately in eval/run_eval.py, not here -- it's an eval-harness
+    # cost, not something a real query against the agent would spend.
+    total_input_tokens: int
+    total_output_tokens: int
+
     # Analyst
     report_type: Optional[str]
     data_sufficient: Optional[bool]
@@ -79,6 +87,8 @@ def new_state(raw_query: str, session_id: str) -> AgentState:
         sub_queries=[],
         current_sub_query_idx=0,
         total_tool_calls=0,
+        total_input_tokens=0,
+        total_output_tokens=0,
         report_type=None,
         data_sufficient=None,
         refine_request=None,
